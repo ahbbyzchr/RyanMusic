@@ -3,12 +3,15 @@ package cn.ryanmusic.app
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.ComponentName
+import android.content.ServiceConnection
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.ValueCallback
@@ -31,6 +34,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
@@ -48,16 +52,26 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnRetryLocal: Button
 
     private var baseUrl: String = "http://127.0.0.1:18765/"
-    private var keepAliveStarted = false
     private var pendingFileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var safeTopDp = 0f
     private var safeBottomDp = 0f
+    private var playbackService: PlaybackSessionService? = null
+    private var playbackBound = false
+    private var pendingPlayback: String? = null
+    private val playbackConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+            val service = (binder as PlaybackSessionService.LocalBinder).service
+            playbackService = service
+            service.commandSink = { action, position -> dispatchMediaCommand(action, position) }
+            pendingPlayback?.let { service.updatePlayback(it) }
+            pendingPlayback = null
+        }
+        override fun onServiceDisconnected(name: ComponentName) { playbackService = null }
+    }
 
     private val notifyPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted) startKeepAlive()
-    }
+    ) { _ -> }
 
     private val fileChooserLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -188,7 +202,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showServerPicker() {
-        stopKeepAlive()
+        stopPlaybackSession()
         webView.visibility = View.GONE
         overlay.visibility = View.VISIBLE
         loading.visibility = View.GONE
@@ -206,7 +220,7 @@ class MainActivity : AppCompatActivity() {
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         settings.cacheMode = WebSettings.LOAD_DEFAULT
         settings.userAgentString =
-            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36 RyanMusicAndroid/${BuildConfig.VERSION_NAME}"
+            "Mozilla/5.0 (Linux; Android ${Build.VERSION.RELEASE}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36 RyanMusicAndroid/${BuildConfig.VERSION_NAME}"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.safeBrowsingEnabled = false
         }
@@ -216,7 +230,7 @@ class MainActivity : AppCompatActivity() {
 
         webView.setBackgroundColor(Color.TRANSPARENT)
         webView.addJavascriptInterface(
-            NativeBridge(this) { baseUrl },
+            NativeBridge(this, { baseUrl }) { payload -> runOnUiThread { receivePlayback(payload) } },
             "AndroidBridge",
         )
         webView.webChromeClient = object : WebChromeClient() {
@@ -255,7 +269,6 @@ class MainActivity : AppCompatActivity() {
                 fallbackPanel.visibility = View.GONE
                 webView.visibility = View.VISIBLE
                 injectSafeAreaInsets()
-                ensureKeepAlive()
             }
         }
     }
@@ -263,6 +276,7 @@ class MainActivity : AppCompatActivity() {
     private fun injectNativeBridge() {
         val script = """
             (function(){
+              document.documentElement.classList.add('platform-android-app');
               if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.ryanSave) return;
               window.webkit = window.webkit || {};
               window.webkit.messageHandlers = window.webkit.messageHandlers || {};
@@ -354,38 +368,52 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun ensureKeepAlive() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val granted = ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS,
-            ) == PackageManager.PERMISSION_GRANTED
-            if (!granted) {
-                notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                return
+    private fun receivePlayback(payload: String) {
+        val data = try { JSONObject(payload) } catch (_: Exception) { return }
+        val state = data.optString("state")
+        if (state !in setOf("playing", "paused", "buffering", "stopped")) return
+        val pausedWithoutTrack = state == "paused" && data.optString("title", "").isBlank() &&
+            data.optString("artist", "").isBlank() && data.optLong("durationMs", 0) <= 0
+        if (state == "stopped" || pausedWithoutTrack) {
+            val stopped = "{\"state\":\"stopped\"}"
+            pendingPlayback = stopped
+            playbackService?.updatePlayback(stopped)
+            return
+        }
+        pendingPlayback = payload
+        if (playbackService != null) {
+            playbackService?.updatePlayback(payload)
+            pendingPlayback = null
+        } else if (!playbackBound) {
+            val intent = Intent(this, PlaybackSessionService::class.java).setAction(PlaybackSessionService.ACTION_LOCAL_BIND)
+            playbackBound = bindService(intent, playbackConnection, Context.BIND_AUTO_CREATE)
+        }
+        if ((state == "playing" || state == "buffering") && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+            !prefs().getBoolean("notification_permission_requested", false)
+        ) {
+            prefs().edit().putBoolean("notification_permission_requested", true).apply()
+            notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private fun dispatchMediaCommand(action: String, position: Long?) {
+        val command = JSONObject().put("action", action)
+        if (position != null) command.put("positionMs", position)
+        webView.post {
+            if (!isFinishing && !isDestroyed) {
+                webView.evaluateJavascript("window.__ryanNativeMediaCommand && window.__ryanNativeMediaCommand(${command});", null)
             }
         }
-        startKeepAlive()
     }
 
-    private fun startKeepAlive() {
-        if (keepAliveStarted) return
-        val intent = Intent(this, PlaybackKeepAliveService::class.java)
-        try {
-            ContextCompat.startForegroundService(this, intent)
-            keepAliveStarted = true
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun stopKeepAlive() {
-        if (!keepAliveStarted) return
-        val intent = Intent(this, PlaybackKeepAliveService::class.java).setAction(PlaybackKeepAliveService.ACTION_STOP)
-        try {
-            startService(intent)
-        } catch (_: Exception) {
-        }
-        keepAliveStarted = false
+    private fun stopPlaybackSession() {
+        pendingPlayback = null
+        playbackService?.updatePlayback("{\"state\":\"stopped\"}")
+        playbackService?.commandSink = null
+        if (playbackBound) unbindService(playbackConnection)
+        playbackBound = false
+        playbackService = null
     }
 
     override fun onResume() {
@@ -401,7 +429,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        stopKeepAlive()
+        stopPlaybackSession()
         pendingFileChooserCallback?.onReceiveValue(null)
         pendingFileChooserCallback = null
         try {
