@@ -4,7 +4,6 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
-import android.content.ActivityNotFoundException
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
@@ -197,17 +196,21 @@ class MainActivity : AppCompatActivity() {
                 filePathCallback: ValueCallback<Array<Uri>>,
                 fileChooserParams: FileChooserParams,
             ): Boolean {
-                // 新的选择请求进来时，先清掉旧的 pending 回调，避免网页卡死
-                pendingFileChooserCallback?.onReceiveValue(null)
+                // 上一个选择器还没返回：直接拒绝新请求，保留旧回调等它回来
+                if (pendingFileChooserCallback != null) {
+                    filePathCallback.onReceiveValue(null)
+                    return true
+                }
                 pendingFileChooserCallback = filePathCallback
                 return try {
                     fileChooserLauncher.launch(fileChooserParams.createIntent())
                     true
-                } catch (e: ActivityNotFoundException) {
+                } catch (e: Exception) {
                     pendingFileChooserCallback = null
                     filePathCallback.onReceiveValue(null)
                     Toast.makeText(this@MainActivity, R.string.file_chooser_missing, Toast.LENGTH_SHORT).show()
-                    false
+                    // 已自行回调过 null，返回 true 避免 WebView 再回调一次
+                    true
                 }
             }
         }
