@@ -1920,47 +1920,47 @@ const App: React.FC = () => {
     });
   }, [playNext, playPrev, requestNativePause, requestNativePlay, seek, status, track]);
 
-  // 安卓壳状态上报：曲目/状态/缓冲变化时立即上报一次
-  const reportAndroidPlayback = useCallback(
-    (state: 'playing' | 'paused' | 'stopped' | 'buffering') => {
-      const bridge = window.AndroidBridge?.playback;
-      if (!bridge) return;
-      try {
-        bridge(JSON.stringify({
-          state,
-          title: track?.title ?? '',
-          artist: track?.author ?? '',
-          artworkUrl: track?.pic ? track.pic : null,
-          positionMs: Math.max(0, Math.round(currentTime.get() * 1000)),
-          durationMs: Math.max(0, Math.round(duration * 1000)),
-          canSkipNext: queue.length > 1,
-          canSkipPrev: queue.length > 1,
-        }));
-      } catch {
-        // 原生桥不可用时静默
-      }
-    },
-    [currentTime, duration, queue.length, track],
-  );
+  // 安卓壳状态上报：状态计算与上报分离，变化时立即上报一次
+  const computeAndroidState = useCallback((): 'playing' | 'paused' | 'stopped' | 'buffering' => {
+    if (!track) return 'stopped';
+    if (buffering || status === 'loading') return 'buffering';
+    if (status === 'playing') return 'playing';
+    return 'paused';
+  }, [buffering, status, track]);
+
+  const reportAndroidPlayback = useCallback(() => {
+    // 不能把 window.AndroidBridge.playback 赋给变量再调用：
+    // 安卓 Java 桥方法被剥离 this 后会抛 "non-injected object"，原生一次都收不到
+    if (!window.AndroidBridge?.playback) return;
+    try {
+      window.AndroidBridge.playback(JSON.stringify({
+        state: computeAndroidState(),
+        title: track?.title ?? '',
+        artist: track?.author ?? '',
+        artworkUrl: track?.pic ? track.pic : null,
+        positionMs: Math.max(0, Math.round(currentTime.get() * 1000)),
+        durationMs: Math.max(0, Math.round(duration * 1000)),
+        canSkipNext: queue.length > 1,
+        canSkipPrev: queue.length > 1,
+      }));
+    } catch {
+      // 原生桥不可用时静默
+    }
+  }, [computeAndroidState, currentTime, duration, queue.length, track]);
 
   useEffect(() => {
     if (!window.AndroidBridge?.playback) return;
-    const state = !track
-      ? 'stopped'
-      : buffering || status === 'loading'
-        ? 'buffering'
-        : status === 'playing'
-          ? 'playing'
-          : 'paused';
-    reportAndroidPlayback(state);
-  }, [buffering, reportAndroidPlayback, status, track]);
+    reportAndroidPlayback();
+  }, [reportAndroidPlayback]);
 
-  // 播放中每 1s 节流上报一次进度
+  // 播放/缓冲中每 1s 节流上报一次进度（状态由 computeAndroidState 实时计算）
   useEffect(() => {
-    if (!window.AndroidBridge?.playback || !track || status !== 'playing') return undefined;
-    const timer = window.setInterval(() => reportAndroidPlayback('playing'), 1000);
+    if (!window.AndroidBridge?.playback) return undefined;
+    const state = computeAndroidState();
+    if (state !== 'playing' && state !== 'buffering') return undefined;
+    const timer = window.setInterval(reportAndroidPlayback, 1000);
     return () => window.clearInterval(timer);
-  }, [reportAndroidPlayback, status, track]);
+  }, [computeAndroidState, reportAndroidPlayback]);
 
   // 接收原生媒体键 / 通知按钮命令
   useEffect(() => {
