@@ -33,6 +33,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity() {
@@ -49,8 +50,8 @@ class MainActivity : AppCompatActivity() {
     private var baseUrl: String = "http://127.0.0.1:18765/"
     private var keepAliveStarted = false
     private var pendingFileChooserCallback: ValueCallback<Array<Uri>>? = null
-    private var safeTopPx = 0
-    private var safeBottomPx = 0
+    private var safeTopDp = 0f
+    private var safeBottomDp = 0f
 
     private val notifyPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -106,11 +107,14 @@ class MainActivity : AppCompatActivity() {
     private fun setupSafeAreaInsets() {
         val root = findViewById<View>(R.id.root)
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            // systemBars ∪ displayCutout（刘海屏顶部可能比状态栏更高）
             val bars = insets.getInsets(
-                WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.navigationBars(),
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
             )
-            safeTopPx = bars.top
-            safeBottomPx = bars.bottom
+            // insets 是物理像素，WebView 的 CSS px 等于 dp，需按 density 换算
+            val density = resources.displayMetrics.density
+            safeTopDp = bars.top / density
+            safeBottomDp = bars.bottom / density
             injectSafeAreaInsets()
             insets
         }
@@ -118,9 +122,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun injectSafeAreaInsets() {
         if (this::webView.isInitialized && webView.visibility == View.VISIBLE) {
+            val top = String.format(Locale.US, "%.1f", safeTopDp)
+            val bottom = String.format(Locale.US, "%.1f", safeBottomDp)
             val script =
-                "document.documentElement.style.setProperty('--safe-top', '${safeTopPx}px');" +
-                    "document.documentElement.style.setProperty('--safe-bottom', '${safeBottomPx}px');"
+                "document.documentElement.style.setProperty('--safe-top', '${top}px');" +
+                    "document.documentElement.style.setProperty('--safe-bottom', '${bottom}px');"
             webView.evaluateJavascript(script, null)
         }
     }
