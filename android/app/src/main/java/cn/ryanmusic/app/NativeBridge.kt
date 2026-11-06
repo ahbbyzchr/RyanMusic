@@ -10,6 +10,7 @@ import android.widget.Toast
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
@@ -37,8 +38,7 @@ class NativeBridge(
                             val base = baseUrlProvider().trimEnd('/')
                             url = "$base/${url.trimStart('/')}"
                         }
-                        val bytes = download(url)
-                        saveBytes(filename, bytes, guessMime(filename))
+                        saveStream(filename, guessMime(filename)) { out -> downloadTo(url, out) }
                     }
                     else -> throw IllegalArgumentException("没有可保存的内容")
                 }
@@ -49,17 +49,24 @@ class NativeBridge(
         }
     }
 
-    private fun download(url: String): ByteArray {
+    private fun downloadTo(url: String, out: OutputStream) {
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 20_000
             readTimeout = 120_000
             instanceFollowRedirects = true
             requestMethod = "GET"
         }
-        conn.inputStream.use { return it.readBytes() }
+        conn.inputStream.use { input ->
+            // 边读边写，避免无损/母带整首进内存
+            input.copyTo(out, bufferSize = 32 * 1024)
+        }
     }
 
     private fun saveBytes(filename: String, bytes: ByteArray, mime: String) {
+        saveStream(filename, mime) { it.write(bytes) }
+    }
+
+    private fun saveStream(filename: String, mime: String, write: (OutputStream) -> Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, filename)
@@ -69,8 +76,14 @@ class NativeBridge(
             val resolver = context.contentResolver
             val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: throw IllegalStateException("无法创建下载文件")
-            resolver.openOutputStream(uri)?.use { it.write(bytes) }
-                ?: throw IllegalStateException("无法写入下载文件")
+            try {
+                resolver.openOutputStream(uri)?.use(write)
+                    ?: throw IllegalStateException("无法写入下载文件")
+            } catch (e: Exception) {
+                // 流式写入中途失败时清掉未完成的 pending 文件
+                resolver.delete(uri, null, null)
+                throw e
+            }
             values.clear()
             values.put(MediaStore.Downloads.IS_PENDING, 0)
             resolver.update(uri, values, null, null)
@@ -78,7 +91,7 @@ class NativeBridge(
             val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
             if (!dir.exists()) dir.mkdirs()
             val out = File(dir, filename)
-            FileOutputStream(out).use { it.write(bytes) }
+            FileOutputStream(out).use(write)
         }
     }
 
