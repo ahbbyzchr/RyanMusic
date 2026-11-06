@@ -6,10 +6,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.webkit.CookieManager
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -44,11 +46,21 @@ class MainActivity : AppCompatActivity() {
 
     private var baseUrl: String = "http://127.0.0.1:18765/"
     private var keepAliveStarted = false
+    private var pendingFileChooserCallback: ValueCallback<Array<Uri>>? = null
 
     private val notifyPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) startKeepAlive()
+    }
+
+    private val fileChooserLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        val callback = pendingFileChooserCallback ?: return@registerForActivityResult
+        pendingFileChooserCallback = null
+        val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+        callback.onReceiveValue(uris)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -174,7 +186,30 @@ class MainActivity : AppCompatActivity() {
             NativeBridge(this) { baseUrl },
             "AndroidBridge",
         )
-        webView.webChromeClient = WebChromeClient()
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onShowFileChooser(
+                view: WebView?,
+                filePathCallback: ValueCallback<Array<Uri>>,
+                fileChooserParams: FileChooserParams,
+            ): Boolean {
+                // 上一个选择器还没返回：直接拒绝新请求，保留旧回调等它回来
+                if (pendingFileChooserCallback != null) {
+                    filePathCallback.onReceiveValue(null)
+                    return true
+                }
+                pendingFileChooserCallback = filePathCallback
+                return try {
+                    fileChooserLauncher.launch(fileChooserParams.createIntent())
+                    true
+                } catch (e: Exception) {
+                    pendingFileChooserCallback = null
+                    filePathCallback.onReceiveValue(null)
+                    Toast.makeText(this@MainActivity, R.string.file_chooser_missing, Toast.LENGTH_SHORT).show()
+                    // 已自行回调过 null，返回 true 避免 WebView 再回调一次
+                    true
+                }
+            }
+        }
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 return false
@@ -333,6 +368,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         stopKeepAlive()
+        pendingFileChooserCallback?.onReceiveValue(null)
+        pendingFileChooserCallback = null
         try {
             CookieManager.getInstance().flush()
             webView.loadUrl("about:blank")
