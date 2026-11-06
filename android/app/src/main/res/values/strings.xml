@@ -6,13 +6,13 @@
     <string name="falling_back_cloud">本机服务不可用，正在连接在线服务…</string>
     <string name="toast_use_remote">可改用在线服务，或连接电脑/自建地址</string>
     <string name="fallback_title">选择服务</string>
-    <string name="fallback_help">搜索和取流需要同一套 Node 后端。默认可直接使用在线服务，也可填写电脑或自建地址，例如 http://192.168.1.8:18765/\n\n电脑需与手机同一 Wi‑Fi，并已打开 RyanMusic。</string>
+    <string name="fallback_help">优先连接自定义地址：电脑桌面版 http://192.168.x.x:18765/ 或 Docker http://192.168.x.x:8088/。\n\n在线服务仅供备用浏览，不保证整曲播放与登录状态。\n\n电脑需与手机同一 Wi‑Fi，并已打开 RyanMusic；桌面版可在菜单/托盘「复制手机访问地址」。</string>
     <string name="hint_remote_url">http://192.168.x.x:18765/ 或 https://…</string>
     <string name="btn_connect">连接自定义地址</string>
-    <string name="btn_use_cloud">使用在线服务</string>
-    <string name="btn_retry_local">重新连接在线服务</string>
+    <string name="btn_use_cloud">使用在线服务（备用）</string>
+    <string name="btn_retry_local">重试上次使用的服务</string>
     <string name="connecting_remote">正在连接远程服务…</string>
-    <string name="connecting_cloud">正在连接在线服务…</string>
+    <string name="connecting_cloud">正在连接在线服务（备用，不保证整曲播放与登录）…</string>
     <string name="remote_failed">连接失败：%1$s</string>
     <string name="menu_use_cloud">使用在线服务</string>
     <string name="menu_change_server">自定义服务器</string>
