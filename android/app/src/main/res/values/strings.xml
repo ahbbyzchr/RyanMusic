@@ -19,6 +19,7 @@
     <string name="menu_exit">退出</string>
     <string name="download_ok">下载成功：%1$s</string>
     <string name="download_fail">下载失败：%1$s</string>
+    <string name="file_chooser_missing">未找到可用的文件选择器</string>
     <string name="notify_channel">正在播放</string>
     <string name="notify_playing">RyanMusic 正在运行，点按返回播放页</string>
 </resources>
