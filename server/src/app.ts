@@ -173,6 +173,8 @@ export function createApp(options: AppOptions) {
 
   app.get('/static/*', (c) => sendFile(c.req.path.slice(1)));
   app.get('/favicon.ico', () => sendFile('favicon.ico'));
+  // 轻量健康检查：安卓自托管连通性探测用，免鉴权
+  app.get('/health', (c) => c.json({ ok: true, version: VERSION }));
   app.get('/apple-art/:id', (c) => {
     const raw = (c.req.param('id') || '').replace(/\.(jpe?g|png|webp)$/i, '');
     if (!/^[A-Za-z0-9._-]+(?:-cover)?$/.test(raw)) return c.text('Not found', 404);
