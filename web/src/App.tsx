@@ -1872,6 +1872,30 @@ const App: React.FC = () => {
     };
   }, [track?.pic, track?.songid, track?.type]);
 
+  // 与安卓壳共享的播放/暂停逻辑：navigator.mediaSession 与 __ryanNativeMediaCommand 都走这里
+  const requestNativePlay = useCallback(() => {
+    if (!track) return;
+    playbackIntentRef.current = 'playing';
+    if (isAppleTrack(track)) {
+      void resumeAppleMusic().catch(() => startAppleQueue(track));
+    } else {
+      void resumeWebAudioPlayback();
+    }
+  }, [resumeWebAudioPlayback, startAppleQueue, track]);
+
+  const requestNativePause = useCallback(() => {
+    if (!track) return;
+    playbackIntentRef.current = 'paused';
+    appleCommandGenRef.current += 1;
+    setStatus('paused');
+    setBuffering(false);
+    if (isAppleTrack(track)) void pauseAppleMusic();
+    else {
+      deckList().forEach((audio) => audio?.pause());
+      parkAudioGraph();
+    }
+  }, [deckList, setStatus, track]);
+
   useEffect(() => {
     if (!track || !('mediaSession' in navigator)) return;
     navigator.mediaSession.metadata = new MediaMetadata({
@@ -1887,31 +1911,85 @@ const App: React.FC = () => {
         : [],
     });
     navigator.mediaSession.playbackState = status === 'playing' ? 'playing' : 'paused';
-    navigator.mediaSession.setActionHandler('play', () => {
-      playbackIntentRef.current = 'playing';
-      if (isAppleTrack(track)) {
-        void resumeAppleMusic().catch(() => startAppleQueue(track));
-      } else {
-        void resumeWebAudioPlayback();
-      }
-    });
-    navigator.mediaSession.setActionHandler('pause', () => {
-      playbackIntentRef.current = 'paused';
-      appleCommandGenRef.current += 1;
-      setStatus('paused');
-      setBuffering(false);
-      if (isAppleTrack(track)) void pauseAppleMusic();
-      else {
-        deckList().forEach((audio) => audio?.pause());
-        parkAudioGraph();
-      }
-    });
+    navigator.mediaSession.setActionHandler('play', () => requestNativePlay());
+    navigator.mediaSession.setActionHandler('pause', () => requestNativePause());
     navigator.mediaSession.setActionHandler('previoustrack', () => playPrev());
     navigator.mediaSession.setActionHandler('nexttrack', () => playNext());
     navigator.mediaSession.setActionHandler('seekto', (details) => {
       if (details.seekTime != null) seek(details.seekTime);
     });
-  }, [deckList, playNext, playPrev, resumeWebAudioPlayback, seek, setStatus, startAppleQueue, status, track]);
+  }, [playNext, playPrev, requestNativePause, requestNativePlay, seek, status, track]);
+
+  // 安卓壳状态上报：曲目/状态/缓冲变化时立即上报一次
+  const reportAndroidPlayback = useCallback(
+    (state: 'playing' | 'paused' | 'stopped' | 'buffering') => {
+      const bridge = window.AndroidBridge?.playback;
+      if (!bridge) return;
+      try {
+        bridge(JSON.stringify({
+          state,
+          title: track?.title ?? '',
+          artist: track?.author ?? '',
+          artworkUrl: track?.pic ? track.pic : null,
+          positionMs: Math.max(0, Math.round(currentTime.get() * 1000)),
+          durationMs: Math.max(0, Math.round(duration * 1000)),
+          canSkipNext: queue.length > 1,
+          canSkipPrev: queue.length > 1,
+        }));
+      } catch {
+        // 原生桥不可用时静默
+      }
+    },
+    [currentTime, duration, queue.length, track],
+  );
+
+  useEffect(() => {
+    if (!window.AndroidBridge?.playback) return;
+    const state = !track
+      ? 'stopped'
+      : buffering || status === 'loading'
+        ? 'buffering'
+        : status === 'playing'
+          ? 'playing'
+          : 'paused';
+    reportAndroidPlayback(state);
+  }, [buffering, reportAndroidPlayback, status, track]);
+
+  // 播放中每 1s 节流上报一次进度
+  useEffect(() => {
+    if (!window.AndroidBridge?.playback || !track || status !== 'playing') return undefined;
+    const timer = window.setInterval(() => reportAndroidPlayback('playing'), 1000);
+    return () => window.clearInterval(timer);
+  }, [reportAndroidPlayback, status, track]);
+
+  // 接收原生媒体键 / 通知按钮命令
+  useEffect(() => {
+    window.__ryanNativeMediaCommand = (cmd) => {
+      if (!cmd) return;
+      switch (cmd.action) {
+        case 'play':
+          requestNativePlay();
+          break;
+        case 'pause':
+          requestNativePause();
+          break;
+        case 'next':
+          playNext();
+          break;
+        case 'previous':
+          playPrev();
+          break;
+        case 'seek':
+          if (typeof cmd.positionMs === 'number' && Number.isFinite(cmd.positionMs)) {
+            seek(cmd.positionMs / 1000);
+          }
+          break;
+      }
+    };
+    return () => {
+      delete window.__ryanNativeMediaCommand;
+    };
+  }, [playNext, playPrev, requestNativePause, requestNativePlay, seek]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

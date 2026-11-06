@@ -40,13 +40,19 @@ export function isMacosApp() {
   return typeof document !== 'undefined' && document.documentElement.classList.contains('platform-macos-app');
 }
 
+export function isAndroidApp() {
+  if (typeof document !== 'undefined' && document.documentElement.classList.contains('platform-android-app')) return true;
+  return typeof window !== 'undefined' && Boolean(window.AndroidBridge?.playback);
+}
+
 export function isNativeApp() {
-  return isWindowsApp() || isMacosApp();
+  return isWindowsApp() || isMacosApp() || isAndroidApp();
 }
 
 export function prefersLightweightVisualizer() {
   if (typeof window === 'undefined') return false;
   if (isWindowsApp()) return true;
+  if (isAndroidApp()) return true;
   if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return true;
   const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
   return typeof memory === 'number' && memory > 0 && memory <= 4;

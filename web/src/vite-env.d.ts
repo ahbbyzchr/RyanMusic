@@ -11,6 +11,14 @@ interface Window {
   __ryanAppleMusicReply?: (payload: Record<string, unknown>) => void;
   __ryanAppleMusicEvent?: (payload: Record<string, unknown>) => void;
   __ryanQishuiReply?: (payload: Record<string, unknown>) => void;
+  __ryanNativeMediaCommand?: (cmd: {
+    action: 'play' | 'pause' | 'next' | 'previous' | 'seek';
+    positionMs?: number;
+  }) => void;
+  AndroidBridge?: {
+    playback?: (payload: string) => void;
+    save?: (payload: string) => void;
+  };
   webkit?: {
     messageHandlers?: {
       ryanSave?: {
