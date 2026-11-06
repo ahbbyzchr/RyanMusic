@@ -1,8 +1,10 @@
 name: Android APK
 
 on:
-  # 默认不跟 tag / main 自动发安卓；需要时手动 workflow_dispatch。
   workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   build:
@@ -46,9 +48,27 @@ jobs:
           gradle-version: "8.7"
           validate-wrappers: false
 
+      - name: Prepare release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "Missing ANDROID_KEYSTORE_BASE64 secret" >&2
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/ryanmusic-release.jks"
+          test -s "$RUNNER_TEMP/ryanmusic-release.jks"
+
       - name: Build release APK
         working-directory: android
-        run: gradle assembleRelease --no-daemon --stacktrace
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/ryanmusic-release.jks
+          RYANMUSIC_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          RYANMUSIC_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          RYANMUSIC_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Rename APK
         run: |
