@@ -78,7 +78,7 @@ class MainActivity : AppCompatActivity() {
             connectRemote(remoteUrlInput.text?.toString().orEmpty(), PersistMode.CUSTOM)
         }
         btnUseCloud.setOnClickListener { connectCloud(PersistMode.CLOUD) }
-        btnRetryLocal.setOnClickListener { connectCloud(PersistMode.CLOUD) }
+        btnRetryLocal.setOnClickListener { startPreferredServer() }
 
         setupWebView()
         setupBackPress()
@@ -98,16 +98,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startPreferredServer() {
-        when (prefs().getString(KEY_MODE, MODE_CLOUD)) {
-            MODE_CUSTOM -> {
-                val saved = prefs().getString(KEY_REMOTE, "").orEmpty().trim()
-                if (saved.isNotEmpty()) {
-                    connectRemote(saved, PersistMode.CUSTOM)
-                } else {
-                    connectCloud(PersistMode.CLOUD)
-                }
-            }
-            else -> connectCloud(PersistMode.CLOUD)
+        // 方案 D：优先上次成功的自定义地址；没有记录才连在线服务（备用）
+        val saved = prefs().getString(KEY_REMOTE, "").orEmpty().trim()
+        if (saved.isNotEmpty()) {
+            connectRemote(saved, PersistMode.CUSTOM)
+        } else {
+            connectCloud(PersistMode.CLOUD)
         }
     }
 
@@ -218,6 +214,29 @@ class MainActivity : AppCompatActivity() {
         connectRemote(BuildConfig.CLOUD_ORIGIN, persist, connectingLabel = R.string.connecting_cloud)
     }
 
+    /**
+     * 连通性探测：先 GET /health（与后端 B1 对齐，返回 JSON），非 2xx 再退回根路径，
+     * 兼容未部署 /health 的旧桌面版；云端 Vercel 两个路径都会被兜住。
+     */
+    private fun probeServer(base: String, timeoutMs: Int) {
+        var lastCode = -1
+        for (path in PROBE_PATHS) {
+            val conn = (URL(base + path).openConnection() as HttpURLConnection).apply {
+                connectTimeout = timeoutMs
+                readTimeout = timeoutMs
+                requestMethod = "GET"
+                instanceFollowRedirects = true
+            }
+            try {
+                lastCode = conn.responseCode
+            } finally {
+                conn.disconnect()
+            }
+            if (lastCode in 200..399) return
+        }
+        throw IllegalStateException("HTTP $lastCode")
+    }
+
     private fun connectRemote(
         raw: String,
         persist: PersistMode,
@@ -242,17 +261,7 @@ class MainActivity : AppCompatActivity() {
         val timeoutMs = if (url.startsWith("https://", ignoreCase = true)) 15_000 else 5_000
         thread(name = "ryan-remote") {
             try {
-                val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                    connectTimeout = timeoutMs
-                    readTimeout = timeoutMs
-                    requestMethod = "GET"
-                    instanceFollowRedirects = true
-                }
-                val code = conn.responseCode
-                conn.disconnect()
-                if (code !in 200..399) {
-                    throw IllegalStateException("HTTP $code")
-                }
+                probeServer(url, timeoutMs)
                 baseUrl = url
                 val editor = prefs().edit()
                 when (persist) {
@@ -340,6 +349,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        private val PROBE_PATHS = arrayOf("health", "health/", "")
         private const val KEY_REMOTE = "remote_url"
         private const val KEY_USE_REMOTE_LEGACY = "use_remote"
         private const val KEY_MODE = "server_mode"
