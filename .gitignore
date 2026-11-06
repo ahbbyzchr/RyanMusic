@@ -30,3 +30,4 @@ android/.idea/
 android/keystore.properties
 *.jks
 *.keystore
+keystore.b64.txt
