@@ -25,3 +25,9 @@ android/.idea/
 *.apk
 *.aab
 *.iml
+
+# Android signing secrets
+android/keystore.properties
+*.jks
+*.keystore
+keystore.b64.txt
