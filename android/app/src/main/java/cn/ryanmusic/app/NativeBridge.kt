@@ -18,8 +18,14 @@ import java.util.concurrent.Executors
 class NativeBridge(
     private val context: Context,
     private val baseUrlProvider: () -> String,
+    private val playbackUpdate: (String) -> Unit,
 ) {
     private val io = Executors.newSingleThreadExecutor()
+
+    @JavascriptInterface
+    fun playback(payloadJson: String) {
+        playbackUpdate(payloadJson)
+    }
 
     @JavascriptInterface
     fun save(payloadJson: String) {
