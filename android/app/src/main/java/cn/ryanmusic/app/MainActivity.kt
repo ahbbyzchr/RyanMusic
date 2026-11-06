@@ -27,10 +27,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity() {
@@ -47,6 +50,8 @@ class MainActivity : AppCompatActivity() {
     private var baseUrl: String = "http://127.0.0.1:18765/"
     private var keepAliveStarted = false
     private var pendingFileChooserCallback: ValueCallback<Array<Uri>>? = null
+    private var safeTopDp = 0f
+    private var safeBottomDp = 0f
 
     private val notifyPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -93,9 +98,37 @@ class MainActivity : AppCompatActivity() {
         btnRetryLocal.setOnClickListener { startPreferredServer() }
 
         setupWebView()
+        setupSafeAreaInsets()
         setupBackPress()
         migrateLegacyPrefs()
         startPreferredServer()
+    }
+
+    private fun setupSafeAreaInsets() {
+        val root = findViewById<View>(R.id.root)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            // systemBars ∪ displayCutout（刘海屏顶部可能比状态栏更高）
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+            )
+            // insets 是物理像素，WebView 的 CSS px 等于 dp，需按 density 换算
+            val density = resources.displayMetrics.density
+            safeTopDp = bars.top / density
+            safeBottomDp = bars.bottom / density
+            injectSafeAreaInsets()
+            insets
+        }
+    }
+
+    private fun injectSafeAreaInsets() {
+        if (this::webView.isInitialized && webView.visibility == View.VISIBLE) {
+            val top = String.format(Locale.US, "%.1f", safeTopDp)
+            val bottom = String.format(Locale.US, "%.1f", safeBottomDp)
+            val script =
+                "document.documentElement.style.setProperty('--safe-top', '${top}px');" +
+                    "document.documentElement.style.setProperty('--safe-bottom', '${bottom}px');"
+            webView.evaluateJavascript(script, null)
+        }
     }
 
     private fun prefs() = getSharedPreferences("ryanmusic", Context.MODE_PRIVATE)
@@ -221,6 +254,7 @@ class MainActivity : AppCompatActivity() {
                 loading.visibility = View.GONE
                 fallbackPanel.visibility = View.GONE
                 webView.visibility = View.VISIBLE
+                injectSafeAreaInsets()
                 ensureKeepAlive()
             }
         }
