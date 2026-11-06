@@ -3,4 +3,10 @@ services:
     build: .
     ports:
       - "8088:80"
+    volumes:
+      # 登录态（netease_auth / qq_auth 等在 cache 目录下）持久化，重建容器不丢扫码登录
+      - ryanmusic-cache:/app/web-root/core/cache
     restart: unless-stopped
+
+volumes:
+  ryanmusic-cache:
