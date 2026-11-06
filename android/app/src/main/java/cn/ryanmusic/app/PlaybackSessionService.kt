@@ -2,9 +2,6 @@ package cn.ryanmusic.app
 
 import android.app.PendingIntent
 import android.content.Intent
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
-import android.media.AudioManager
 import android.net.Uri
 import android.os.Binder
 import android.os.IBinder
@@ -29,26 +26,10 @@ class PlaybackSessionService : MediaSessionService() {
     private val localBinder = LocalBinder()
     private lateinit var mirror: WebMirrorPlayer
     private lateinit var session: MediaSession
-    private lateinit var audioManager: AudioManager
-    private var hasFocus = false
     var commandSink: ((String, Long?) -> Unit)? = null
-
-    private val focusRequest by lazy {
-        AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
-            .setOnAudioFocusChangeListener { change ->
-                if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT ||
-                    change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) {
-                    hasFocus = false
-                    commandSink?.invoke("pause", null)
-                }
-            }.build()
-    }
 
     override fun onCreate() {
         super.onCreate()
-        audioManager = getSystemService(AudioManager::class.java)
         mirror = WebMirrorPlayer { action, position -> commandSink?.invoke(action, position) }
         val activity = PendingIntent.getActivity(this, 0,
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
@@ -66,21 +47,12 @@ class PlaybackSessionService : MediaSessionService() {
         val payload = try { JSONObject(json) } catch (_: Exception) { return }
         val state = payload.optString("state")
         if (state !in setOf("playing", "paused", "buffering", "stopped")) return
+        // WebView owns audio focus; the session mirrors the state reported by the page.
         mirror.update(payload)
-        if (state == "playing" || state == "buffering") {
-            if (!hasFocus) {
-                hasFocus = audioManager.requestAudioFocus(focusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-                if (!hasFocus) commandSink?.invoke("pause", null)
-            }
-        } else if (hasFocus) {
-            audioManager.abandonAudioFocusRequest(focusRequest)
-            hasFocus = false
-        }
         if (state == "stopped") stopSelf()
     }
 
     override fun onDestroy() {
-        if (hasFocus) audioManager.abandonAudioFocusRequest(focusRequest)
         commandSink = null
         session.release()
         mirror.release()

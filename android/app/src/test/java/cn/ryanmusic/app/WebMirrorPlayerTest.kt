@@ -36,6 +36,8 @@ class WebMirrorPlayerTest {
     @Test fun stoppedClearsTimelineAndDisabledSkipCommands() {
         val player = WebMirrorPlayer { _, _ -> }
         player.update(JSONObject("""{"state":"paused","canSkipNext":false,"canSkipPrev":false}"""))
+        assertEquals(Player.STATE_READY, player.playbackState)
+        assertFalse(player.playWhenReady)
         assertFalse(player.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT))
         assertFalse(player.isCommandAvailable(Player.COMMAND_SEEK_TO_PREVIOUS))
         player.update(JSONObject("""{"state":"stopped"}"""))
