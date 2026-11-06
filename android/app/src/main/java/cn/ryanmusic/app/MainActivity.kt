@@ -27,7 +27,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import java.net.HttpURLConnection
 import java.net.URL
@@ -47,6 +49,8 @@ class MainActivity : AppCompatActivity() {
     private var baseUrl: String = "http://127.0.0.1:18765/"
     private var keepAliveStarted = false
     private var pendingFileChooserCallback: ValueCallback<Array<Uri>>? = null
+    private var safeTopPx = 0
+    private var safeBottomPx = 0
 
     private val notifyPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -93,9 +97,32 @@ class MainActivity : AppCompatActivity() {
         btnRetryLocal.setOnClickListener { startPreferredServer() }
 
         setupWebView()
+        setupSafeAreaInsets()
         setupBackPress()
         migrateLegacyPrefs()
         startPreferredServer()
+    }
+
+    private fun setupSafeAreaInsets() {
+        val root = findViewById<View>(R.id.root)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.navigationBars(),
+            )
+            safeTopPx = bars.top
+            safeBottomPx = bars.bottom
+            injectSafeAreaInsets()
+            insets
+        }
+    }
+
+    private fun injectSafeAreaInsets() {
+        if (this::webView.isInitialized && webView.visibility == View.VISIBLE) {
+            val script =
+                "document.documentElement.style.setProperty('--safe-top', '${safeTopPx}px');" +
+                    "document.documentElement.style.setProperty('--safe-bottom', '${safeBottomPx}px');"
+            webView.evaluateJavascript(script, null)
+        }
     }
 
     private fun prefs() = getSharedPreferences("ryanmusic", Context.MODE_PRIVATE)
@@ -221,6 +248,7 @@ class MainActivity : AppCompatActivity() {
                 loading.visibility = View.GONE
                 fallbackPanel.visibility = View.GONE
                 webView.visibility = View.VISIBLE
+                injectSafeAreaInsets()
                 ensureKeepAlive()
             }
         }
