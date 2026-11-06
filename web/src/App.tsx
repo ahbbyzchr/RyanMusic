@@ -1872,6 +1872,30 @@ const App: React.FC = () => {
     };
   }, [track?.pic, track?.songid, track?.type]);
 
+  // 与安卓壳共享的播放/暂停逻辑：navigator.mediaSession 与 __ryanNativeMediaCommand 都走这里
+  const requestNativePlay = useCallback(() => {
+    if (!track) return;
+    playbackIntentRef.current = 'playing';
+    if (isAppleTrack(track)) {
+      void resumeAppleMusic().catch(() => startAppleQueue(track));
+    } else {
+      void resumeWebAudioPlayback();
+    }
+  }, [resumeWebAudioPlayback, startAppleQueue, track]);
+
+  const requestNativePause = useCallback(() => {
+    if (!track) return;
+    playbackIntentRef.current = 'paused';
+    appleCommandGenRef.current += 1;
+    setStatus('paused');
+    setBuffering(false);
+    if (isAppleTrack(track)) void pauseAppleMusic();
+    else {
+      deckList().forEach((audio) => audio?.pause());
+      parkAudioGraph();
+    }
+  }, [deckList, setStatus, track]);
+
   useEffect(() => {
     if (!track || !('mediaSession' in navigator)) return;
     navigator.mediaSession.metadata = new MediaMetadata({
@@ -1887,31 +1911,85 @@ const App: React.FC = () => {
         : [],
     });
     navigator.mediaSession.playbackState = status === 'playing' ? 'playing' : 'paused';
-    navigator.mediaSession.setActionHandler('play', () => {
-      playbackIntentRef.current = 'playing';
-      if (isAppleTrack(track)) {
-        void resumeAppleMusic().catch(() => startAppleQueue(track));
-      } else {
-        void resumeWebAudioPlayback();
-      }
-    });
-    navigator.mediaSession.setActionHandler('pause', () => {
-      playbackIntentRef.current = 'paused';
-      appleCommandGenRef.current += 1;
-      setStatus('paused');
-      setBuffering(false);
-      if (isAppleTrack(track)) void pauseAppleMusic();
-      else {
-        deckList().forEach((audio) => audio?.pause());
-        parkAudioGraph();
-      }
-    });
+    navigator.mediaSession.setActionHandler('play', () => requestNativePlay());
+    navigator.mediaSession.setActionHandler('pause', () => requestNativePause());
     navigator.mediaSession.setActionHandler('previoustrack', () => playPrev());
     navigator.mediaSession.setActionHandler('nexttrack', () => playNext());
     navigator.mediaSession.setActionHandler('seekto', (details) => {
       if (details.seekTime != null) seek(details.seekTime);
     });
-  }, [deckList, playNext, playPrev, resumeWebAudioPlayback, seek, setStatus, startAppleQueue, status, track]);
+  }, [playNext, playPrev, requestNativePause, requestNativePlay, seek, status, track]);
+
+  // 安卓壳状态上报：状态计算与上报分离，变化时立即上报一次
+  const computeAndroidState = useCallback((): 'playing' | 'paused' | 'stopped' | 'buffering' => {
+    if (!track) return 'stopped';
+    if (buffering || status === 'loading') return 'buffering';
+    if (status === 'playing') return 'playing';
+    return 'paused';
+  }, [buffering, status, track]);
+
+  const reportAndroidPlayback = useCallback(() => {
+    // 不能把 window.AndroidBridge.playback 赋给变量再调用：
+    // 安卓 Java 桥方法被剥离 this 后会抛 "non-injected object"，原生一次都收不到
+    if (!window.AndroidBridge?.playback) return;
+    try {
+      window.AndroidBridge.playback(JSON.stringify({
+        state: computeAndroidState(),
+        title: track?.title ?? '',
+        artist: track?.author ?? '',
+        artworkUrl: track?.pic ? track.pic : null,
+        positionMs: Math.max(0, Math.round(currentTime.get() * 1000)),
+        durationMs: Math.max(0, Math.round(duration * 1000)),
+        canSkipNext: queue.length > 1,
+        canSkipPrev: queue.length > 1,
+      }));
+    } catch {
+      // 原生桥不可用时静默
+    }
+  }, [computeAndroidState, currentTime, duration, queue.length, track]);
+
+  useEffect(() => {
+    if (!window.AndroidBridge?.playback) return;
+    reportAndroidPlayback();
+  }, [reportAndroidPlayback]);
+
+  // 播放/缓冲中每 1s 节流上报一次进度（状态由 computeAndroidState 实时计算）
+  useEffect(() => {
+    if (!window.AndroidBridge?.playback) return undefined;
+    const state = computeAndroidState();
+    if (state !== 'playing' && state !== 'buffering') return undefined;
+    const timer = window.setInterval(reportAndroidPlayback, 1000);
+    return () => window.clearInterval(timer);
+  }, [computeAndroidState, reportAndroidPlayback]);
+
+  // 接收原生媒体键 / 通知按钮命令
+  useEffect(() => {
+    window.__ryanNativeMediaCommand = (cmd) => {
+      if (!cmd) return;
+      switch (cmd.action) {
+        case 'play':
+          requestNativePlay();
+          break;
+        case 'pause':
+          requestNativePause();
+          break;
+        case 'next':
+          playNext();
+          break;
+        case 'previous':
+          playPrev();
+          break;
+        case 'seek':
+          if (typeof cmd.positionMs === 'number' && Number.isFinite(cmd.positionMs)) {
+            seek(cmd.positionMs / 1000);
+          }
+          break;
+      }
+    };
+    return () => {
+      delete window.__ryanNativeMediaCommand;
+    };
+  }, [playNext, playPrev, requestNativePause, requestNativePlay, seek]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
