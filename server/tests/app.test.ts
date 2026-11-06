@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createApp } from '../src/app.ts';
+import { VERSION } from '../src/config.ts';
 
 function testApp() {
   const dir = mkdtempSync(join(tmpdir(), 'ryanmusic-'));
@@ -15,6 +16,16 @@ test('api.php rejects missing params', async () => {
   const res = await app.request('/api.php');
   assert.equal(res.status, 400);
   assert.match(await res.text(), /缺少请求参数/);
+});
+
+test('GET /health returns ok and version without auth', async () => {
+  const app = testApp();
+  const res = await app.request('/health');
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type') || '', /application\/json/);
+  const json = (await res.json()) as { ok: boolean; version: string };
+  assert.equal(json.ok, true);
+  assert.equal(json.version, VERSION);
 });
 
 test('xhr search without fields returns 403 payload', async () => {
