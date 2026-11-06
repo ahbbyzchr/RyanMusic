@@ -7,12 +7,12 @@ val repoRoot = rootProject.projectDir.parentFile
 
 android {
     namespace = "cn.ryanmusic.app"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "cn.ryanmusic.app"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 2017
         versionName = "2.0.17"
         val cloudOriginFile = File(repoRoot, "shared/cloud-origin.txt")
